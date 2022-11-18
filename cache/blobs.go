@@ -53,6 +53,157 @@ func (sr *immutableRef) computeBlobChain(ctx context.Context, createIfNeeded boo
 	return computeBlobChain(ctx, sr, createIfNeeded, comp, s, filter)
 }
 
+func computeBlob(ctx context.Context, sr *immutableRef, createIfNeeded bool, comp compression.Config, s session.Group, filter map[string]struct{}) (*ocispecs.Descriptor, error) {
+	compressorFunc, finalize := comp.Type.Compress(ctx, comp)
+	mediaType := comp.Type.MediaType()
+
+	var lowerRef *immutableRef
+	switch sr.kind() {
+	case Diff:
+		lowerRef = sr.diffParents.lower
+	case Layer:
+		lowerRef = sr.layerParent
+	}
+	var lower []mount.Mount
+	if lowerRef != nil {
+		m, err := lowerRef.Mount(ctx, true, s)
+		if err != nil {
+			return nil, err
+		}
+		var release func() error
+		lower, release, err = m.Mount()
+		if err != nil {
+			return nil, err
+		}
+		if release != nil {
+			defer release()
+		}
+	}
+
+	var upperRef *immutableRef
+	switch sr.kind() {
+	case Diff:
+		upperRef = sr.diffParents.upper
+	default:
+		upperRef = sr
+	}
+	var upper []mount.Mount
+	if upperRef != nil {
+		m, err := upperRef.Mount(ctx, true, s)
+		if err != nil {
+			return nil, err
+		}
+		var release func() error
+		upper, release, err = m.Mount()
+		if err != nil {
+			return nil, err
+		}
+		if release != nil {
+			defer release()
+		}
+	}
+
+	var desc ocispecs.Descriptor
+	var err error
+
+	// Determine differ and error/log handling according to the platform, envvar and the snapshotter.
+	var enableOverlay, fallback, logWarnOnErr bool
+	if forceOvlStr := os.Getenv("BUILDKIT_DEBUG_FORCE_OVERLAY_DIFF"); forceOvlStr != "" && sr.kind() != Diff {
+		enableOverlay, err = strconv.ParseBool(forceOvlStr)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid boolean in BUILDKIT_DEBUG_FORCE_OVERLAY_DIFF")
+		}
+		fallback = false // prohibit fallback on debug
+	} else if !isTypeWindows(sr) {
+		enableOverlay, fallback = true, true
+		switch sr.cm.Snapshotter.Name() {
+		case "overlayfs", "stargz":
+			// overlayfs-based snapshotters should support overlay diff except when running an arbitrary diff
+			// (in which case lower and upper may differ by more than one layer), so print warn log on unexpected
+			// failure.
+			logWarnOnErr = sr.kind() != Diff
+		case "fuse-overlayfs", "native":
+			// not supported with fuse-overlayfs snapshotter which doesn't provide overlayfs mounts.
+			// TODO: add support for fuse-overlayfs
+			enableOverlay = false
+		}
+	}
+	if enableOverlay {
+		computed, ok, err := sr.tryComputeOverlayBlob(ctx, lower, upper, mediaType, sr.ID(), compressorFunc)
+		if !ok || err != nil {
+			if !fallback {
+				if !ok {
+					return nil, errors.Errorf("overlay mounts not detected (lower=%+v,upper=%+v)", lower, upper)
+				}
+				if err != nil {
+					return nil, errors.Wrapf(err, "failed to compute overlay diff")
+				}
+			}
+			if logWarnOnErr {
+				logrus.Warnf("failed to compute blob by overlay differ (ok=%v): %v", ok, err)
+			}
+		}
+		if ok {
+			desc = computed
+		}
+	}
+
+	if desc.Digest == "" && !isTypeWindows(sr) && comp.Type.NeedsComputeDiffBySelf() {
+		// These compression types aren't supported by containerd differ. So try to compute diff on buildkit side.
+		// This case can be happen on containerd worker + non-overlayfs snapshotter (e.g. native).
+		// See also: https://github.com/containerd/containerd/issues/4263
+		desc, err = walking.NewWalkingDiff(sr.cm.ContentStore).Compare(ctx, lower, upper,
+			diff.WithMediaType(mediaType),
+			diff.WithReference(sr.ID()),
+			diff.WithCompressor(compressorFunc),
+		)
+		if err != nil {
+			logrus.WithError(err).Warnf("failed to compute blob by buildkit differ")
+		}
+	}
+
+	if desc.Digest == "" {
+		desc, err = sr.cm.Differ.Compare(ctx, lower, upper,
+			diff.WithMediaType(mediaType),
+			diff.WithReference(sr.ID()),
+			diff.WithCompressor(compressorFunc),
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if desc.Annotations == nil {
+		desc.Annotations = map[string]string{}
+	}
+	if finalize != nil {
+		a, err := finalize(ctx, sr.cm.ContentStore)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to finalize compression")
+		}
+		for k, v := range a {
+			desc.Annotations[k] = v
+		}
+	}
+	info, err := sr.cm.ContentStore.Info(ctx, desc.Digest)
+	if err != nil {
+		return nil, err
+	}
+
+	if diffID, ok := info.Labels[containerdUncompressed]; ok {
+		desc.Annotations[containerdUncompressed] = diffID
+	} else if mediaType == ocispecs.MediaTypeImageLayer {
+		desc.Annotations[containerdUncompressed] = desc.Digest.String()
+	} else {
+		return nil, errors.Errorf("unknown layer compression type")
+	}
+
+	if err := sr.setBlob(ctx, desc); err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
 func computeBlobChain(ctx context.Context, sr *immutableRef, createIfNeeded bool, comp compression.Config, s session.Group, filter map[string]struct{}) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	switch sr.kind() {
@@ -86,154 +237,7 @@ func computeBlobChain(ctx context.Context, sr *immutableRef, createIfNeeded bool
 					return nil, errors.WithStack(ErrNoBlobs)
 				}
 
-				compressorFunc, finalize := comp.Type.Compress(ctx, comp)
-				mediaType := comp.Type.MediaType()
-
-				var lowerRef *immutableRef
-				switch sr.kind() {
-				case Diff:
-					lowerRef = sr.diffParents.lower
-				case Layer:
-					lowerRef = sr.layerParent
-				}
-				var lower []mount.Mount
-				if lowerRef != nil {
-					m, err := lowerRef.Mount(ctx, true, s)
-					if err != nil {
-						return nil, err
-					}
-					var release func() error
-					lower, release, err = m.Mount()
-					if err != nil {
-						return nil, err
-					}
-					if release != nil {
-						defer release()
-					}
-				}
-
-				var upperRef *immutableRef
-				switch sr.kind() {
-				case Diff:
-					upperRef = sr.diffParents.upper
-				default:
-					upperRef = sr
-				}
-				var upper []mount.Mount
-				if upperRef != nil {
-					m, err := upperRef.Mount(ctx, true, s)
-					if err != nil {
-						return nil, err
-					}
-					var release func() error
-					upper, release, err = m.Mount()
-					if err != nil {
-						return nil, err
-					}
-					if release != nil {
-						defer release()
-					}
-				}
-
-				var desc ocispecs.Descriptor
-				var err error
-
-				// Determine differ and error/log handling according to the platform, envvar and the snapshotter.
-				var enableOverlay, fallback, logWarnOnErr bool
-				if forceOvlStr := os.Getenv("BUILDKIT_DEBUG_FORCE_OVERLAY_DIFF"); forceOvlStr != "" && sr.kind() != Diff {
-					enableOverlay, err = strconv.ParseBool(forceOvlStr)
-					if err != nil {
-						return nil, errors.Wrapf(err, "invalid boolean in BUILDKIT_DEBUG_FORCE_OVERLAY_DIFF")
-					}
-					fallback = false // prohibit fallback on debug
-				} else if !isTypeWindows(sr) {
-					enableOverlay, fallback = true, true
-					switch sr.cm.Snapshotter.Name() {
-					case "overlayfs", "stargz":
-						// overlayfs-based snapshotters should support overlay diff except when running an arbitrary diff
-						// (in which case lower and upper may differ by more than one layer), so print warn log on unexpected
-						// failure.
-						logWarnOnErr = sr.kind() != Diff
-					case "fuse-overlayfs", "native":
-						// not supported with fuse-overlayfs snapshotter which doesn't provide overlayfs mounts.
-						// TODO: add support for fuse-overlayfs
-						enableOverlay = false
-					}
-				}
-				if enableOverlay {
-					computed, ok, err := sr.tryComputeOverlayBlob(ctx, lower, upper, mediaType, sr.ID(), compressorFunc)
-					if !ok || err != nil {
-						if !fallback {
-							if !ok {
-								return nil, errors.Errorf("overlay mounts not detected (lower=%+v,upper=%+v)", lower, upper)
-							}
-							if err != nil {
-								return nil, errors.Wrapf(err, "failed to compute overlay diff")
-							}
-						}
-						if logWarnOnErr {
-							logrus.Warnf("failed to compute blob by overlay differ (ok=%v): %v", ok, err)
-						}
-					}
-					if ok {
-						desc = computed
-					}
-				}
-
-				if desc.Digest == "" && !isTypeWindows(sr) && comp.Type.NeedsComputeDiffBySelf() {
-					// These compression types aren't supported by containerd differ. So try to compute diff on buildkit side.
-					// This case can be happen on containerd worker + non-overlayfs snapshotter (e.g. native).
-					// See also: https://github.com/containerd/containerd/issues/4263
-					desc, err = walking.NewWalkingDiff(sr.cm.ContentStore).Compare(ctx, lower, upper,
-						diff.WithMediaType(mediaType),
-						diff.WithReference(sr.ID()),
-						diff.WithCompressor(compressorFunc),
-					)
-					if err != nil {
-						logrus.WithError(err).Warnf("failed to compute blob by buildkit differ")
-					}
-				}
-
-				if desc.Digest == "" {
-					desc, err = sr.cm.Differ.Compare(ctx, lower, upper,
-						diff.WithMediaType(mediaType),
-						diff.WithReference(sr.ID()),
-						diff.WithCompressor(compressorFunc),
-					)
-					if err != nil {
-						return nil, err
-					}
-				}
-
-				if desc.Annotations == nil {
-					desc.Annotations = map[string]string{}
-				}
-				if finalize != nil {
-					a, err := finalize(ctx, sr.cm.ContentStore)
-					if err != nil {
-						return nil, errors.Wrapf(err, "failed to finalize compression")
-					}
-					for k, v := range a {
-						desc.Annotations[k] = v
-					}
-				}
-				info, err := sr.cm.ContentStore.Info(ctx, desc.Digest)
-				if err != nil {
-					return nil, err
-				}
-
-				if diffID, ok := info.Labels[containerdUncompressed]; ok {
-					desc.Annotations[containerdUncompressed] = diffID
-				} else if mediaType == ocispecs.MediaTypeImageLayer {
-					desc.Annotations[containerdUncompressed] = desc.Digest.String()
-				} else {
-					return nil, errors.Errorf("unknown layer compression type")
-				}
-
-				if err := sr.setBlob(ctx, desc); err != nil {
-					return nil, err
-				}
-				return nil, nil
+				return computeBlob(ctx, sr, createIfNeeded, comp, s, filter)
 			})
 			if err != nil {
 				return err
@@ -432,18 +436,28 @@ func ensureCompression(ctx context.Context, ref *immutableRef, comp compression.
 			return nil, nil // found the compression variant. no need to convert.
 		}
 
-		// Convert layer compression type
-		if err := (lazyRefProvider{
-			ref:     ref,
-			desc:    desc,
-			dh:      ref.descHandlers[desc.Digest],
-			session: s,
-		}).Unlazy(ctx); err != nil {
-			return nil, err
-		}
-		newDesc, err := layerConvertFunc(ctx, ref.cm.ContentStore, desc)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to convert")
+		// For the source compression type which haven't provide decompression (for converting)
+		// ability, re-compute diff to ensure ref has the specified target compression type.
+		var newDesc *ocispecs.Descriptor
+		if ok, _ := compression.Nydus.Is(ctx, ref.cm.ContentStore, desc); ok {
+			newDesc, err = computeBlob(ctx, ref, true, comp, s, ref.layerSet())
+			if err != nil {
+				return nil, errors.Wrap(err, "compute blob")
+			}
+		} else {
+			// Convert layer compression type
+			if err := (lazyRefProvider{
+				ref:     ref,
+				desc:    desc,
+				dh:      ref.descHandlers[desc.Digest],
+				session: s,
+			}).Unlazy(ctx); err != nil {
+				return nil, err
+			}
+			newDesc, err = layerConvertFunc(ctx, ref.cm.ContentStore, desc)
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to convert")
+			}
 		}
 
 		// Start to track converted layer

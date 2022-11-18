@@ -22,6 +22,7 @@ import (
 	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	"github.com/moby/buildkit/nydus"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/util/compression"
@@ -219,6 +220,11 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 			done(context.TODO())
 		}
 	}()
+
+	mprovider := contentutil.NewMultiProvider(e.opt.ImageWriter.ContentStore())
+	e.opt.ImageWriter.nydusProvider = nydus.NewNydusProvider(mprovider)
+
+	ctx = nydus.Configure(ctx, e.opt.RegistryHosts, e.opt.SessionManager, e.opt.ImageWriter.ContentStore(), e.opt.ImageWriter.nydusProvider, e.opts.ImageName, &opts.RefCfg, sessionID)
 
 	desc, err := e.opt.ImageWriter.Commit(ctx, src, sessionID, &opts)
 	if err != nil {

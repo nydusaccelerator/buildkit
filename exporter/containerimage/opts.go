@@ -21,6 +21,10 @@ const (
 	keyBuildInfoAttrs          = "buildinfo-attrs"
 	keyForceInlineAttestations = "attestation-inline"
 
+	keyNydusFsVersion      = "nydus-fs-version"
+	keyNydusFsCompressor   = "nydus-compressor"
+	keyNydusChunkDictImage = "nydus-chunk-dict-image"
+
 	// preferNondistLayersKey is an exporter option which can be used to mark a layer as non-distributable if the layer reference was
 	// already found to use a non-distributable media type.
 	// When this option is not set, the exporter will change the media type of the layer to a distributable one.
@@ -80,6 +84,12 @@ func (c *ImageCommitOpts) Load(opt map[string]string) (map[string]string, error)
 			err = parseBool(&c.ForceInlineAttestations, k, v)
 		case keyPreferNondistLayers:
 			err = parseBool(&c.RefCfg.PreferNonDistributable, k, v)
+		case keyNydusFsVersion:
+			c.RefCfg.Compression.NydusFsVersion = v
+		case keyNydusFsCompressor:
+			c.RefCfg.Compression.NydusCompressor = v
+		case keyNydusChunkDictImage:
+			c.RefCfg.Compression.NydusChunkDictImage = v
 		default:
 			rest[k] = v
 		}

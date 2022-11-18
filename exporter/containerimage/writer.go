@@ -20,6 +20,7 @@ import (
 	"github.com/moby/buildkit/exporter/attestation"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/exporter/util/epoch"
+	"github.com/moby/buildkit/nydus"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver"
@@ -54,7 +55,8 @@ func NewImageWriter(opt WriterOpt) (*ImageWriter, error) {
 }
 
 type ImageWriter struct {
-	opt WriterOpt
+	opt           WriterOpt
+	nydusProvider *nydus.NydusProvider
 }
 
 func (ic *ImageWriter) Commit(ctx context.Context, inp *exporter.Source, sessionID string, opts *ImageCommitOpts) (*ocispecs.Descriptor, error) {

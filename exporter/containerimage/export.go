@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	"github.com/moby/buildkit/nydus"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/util/compression"
@@ -33,6 +35,7 @@ import (
 	"github.com/opencontainers/image-spec/identity"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -217,6 +220,19 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 	defer func() {
 		if descref == nil {
 			done(context.TODO())
+		}
+	}()
+
+	mprovider := contentutil.NewMultiProvider(e.opt.ImageWriter.ContentStore())
+	e.opt.ImageWriter.nydusProvider = nydus.NewNydusProvider(mprovider)
+
+	ctx = nydus.Configure(ctx, e.opt.RegistryHosts, e.opt.SessionManager, e.opt.ImageWriter.ContentStore(), e.opt.ImageWriter.nydusProvider, e.opts.ImageName, &opts.RefCfg, sessionID)
+	defer func() {
+		if opts.RefCfg.Compression.Type == compression.Nydus &&
+			opts.RefCfg.Compression.NydusChunkDictPath != "" {
+			if err := os.Remove(opts.RefCfg.Compression.NydusChunkDictPath); err != nil {
+				logrus.WithError(err).Warn("cleanup nydus chunk dict bootstrap")
+			}
 		}
 	}()
 

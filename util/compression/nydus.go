@@ -14,7 +14,20 @@ import (
 	"github.com/pkg/errors"
 
 	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
+	nydusutil "github.com/moby/buildkit/nydus/util"
 )
+
+const layerAnnotationNydusChunkDictDigest = "containerd.io/snapshot/nydus-chunk-dict-digest"
+const layerAnnotationNydusCompressor = "containerd.io/snapshot/nydus-compressor"
+
+var NydusAnnotations = []string{
+	nydusify.LayerAnnotationNydusBlob,
+	nydusify.LayerAnnotationFSVersion,
+	nydusify.LayerAnnotationNydusBootstrap,
+	nydusify.LayerAnnotationNydusBlobIDs,
+	layerAnnotationNydusChunkDictDigest,
+	layerAnnotationNydusCompressor,
+}
 
 type nydusType struct{}
 
@@ -23,6 +36,21 @@ var Nydus = nydusType{}
 func init() {
 	toDockerLayerType[nydusify.MediaTypeNydusBlob] = nydusify.MediaTypeNydusBlob
 	toOCILayerType[nydusify.MediaTypeNydusBlob] = nydusify.MediaTypeNydusBlob
+}
+
+// isNydusMatch returns true when the specified digest of content
+// is match with user-specified export options, for example:
+// --nydus-fs-version, --nydus-chunk-dict-image, --nydus-compressor.
+func isNydusMatch(ctx context.Context, desc ocispecs.Descriptor) bool {
+	fsVersion, compressor, chunkDictDigest := nydusutil.GetContext(ctx)
+
+	if desc.Annotations[nydusify.LayerAnnotationFSVersion] == fsVersion &&
+		desc.Annotations[layerAnnotationNydusCompressor] == compressor &&
+		desc.Annotations[layerAnnotationNydusChunkDictDigest] == chunkDictDigest {
+		return true
+	}
+
+	return false
 }
 
 func Parse(t string) (Type, error) {
@@ -45,7 +73,11 @@ func (c nydusType) Compress(ctx context.Context, comp Config) (compressorFunc Co
 	digester := digest.Canonical.Digester()
 	return func(dest io.Writer, requiredMediaType string) (io.WriteCloser, error) {
 			writer := io.MultiWriter(dest, digester.Hash())
-			return nydusify.Pack(ctx, writer, nydusify.PackOption{})
+			return nydusify.Pack(ctx, writer, nydusify.PackOption{
+				FsVersion:     comp.NydusFsVersion,
+				Compressor:    comp.NydusCompressor,
+				ChunkDictPath: comp.NydusChunkDictPath,
+			})
 		}, func(ctx context.Context, cs content.Store) (map[string]string, error) {
 			// Fill necessary labels
 			uncompressedDgst := digester.Digest().String()
@@ -61,11 +93,16 @@ func (c nydusType) Compress(ctx context.Context, comp Config) (compressorFunc Co
 				return nil, errors.Wrap(err, "update info to content store")
 			}
 
+			fsVersion, compressor, chunkDictDigest := nydusutil.GetContext(ctx)
+
 			// Fill annotations
 			annotations := map[string]string{
 				containerdUncompressed: uncompressedDgst,
 				// Use this annotation to identify nydus blob layer.
-				nydusify.LayerAnnotationNydusBlob: "true",
+				nydusify.LayerAnnotationNydusBlob:   "true",
+				nydusify.LayerAnnotationFSVersion:   fsVersion,
+				layerAnnotationNydusChunkDictDigest: chunkDictDigest,
+				layerAnnotationNydusCompressor:      compressor,
 			}
 			return annotations, nil
 		}
@@ -96,7 +133,7 @@ func (c nydusType) NeedsConversion(ctx context.Context, cs content.Store, desc o
 
 	if isNydusBlob, err := c.Is(ctx, cs, desc); err != nil {
 		return true, nil
-	} else if isNydusBlob {
+	} else if isNydusBlob && isNydusMatch(ctx, desc) {
 		return false, nil
 	}
 

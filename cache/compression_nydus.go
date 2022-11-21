@@ -47,34 +47,32 @@ func needsForceCompression(ctx context.Context, cs content.Store, source ocispec
 // 1. Extracts nydus bootstrap from nydus format (nydus blob + nydus bootstrap) for each layer.
 // 2. Merge all nydus bootstraps into a final bootstrap (will as an extra layer).
 // The nydus bootstrap size is very small, so the merge operation is fast.
-func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, s session.Group) (*ocispecs.Descriptor, error) {
+func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, s session.Group) (*ocispecs.Descriptor, []ocispecs.Descriptor, error) {
 	iref, ok := ref.(*immutableRef)
 	if !ok {
-		return nil, fmt.Errorf("unsupported ref")
+		return nil, nil, fmt.Errorf("unsupported ref")
 	}
 	refs := iref.layerChain()
 	if len(refs) == 0 {
-		return nil, fmt.Errorf("refs can't be empty")
+		return nil, nil, fmt.Errorf("refs can't be empty")
 	}
 
 	// Extracts nydus bootstrap from nydus format for each layer.
 	var cm *cacheManager
 	layers := []nydusify.Layer{}
-	blobIDs := []string{}
 	for _, ref := range refs {
 		blobDesc, err := getBlobWithCompressionWithRetry(ctx, ref, comp, s)
 		if err != nil {
-			return nil, errors.Wrapf(err, "get compression blob %q", comp.Type)
+			return nil, nil, errors.Wrapf(err, "get compression blob %q", comp.Type)
 		}
 		ra, err := ref.cm.ContentStore.ReaderAt(ctx, blobDesc)
 		if err != nil {
-			return nil, errors.Wrapf(err, "get reader for compression blob %q", comp.Type)
+			return nil, nil, errors.Wrapf(err, "get reader for compression blob %q", comp.Type)
 		}
 		defer ra.Close()
 		if cm == nil {
 			cm = ref.cm
 		}
-		blobIDs = append(blobIDs, blobDesc.Digest.Hex())
 		layers = append(layers, nydusify.Layer{
 			Digest:   blobDesc.Digest,
 			ReaderAt: ra,
@@ -83,19 +81,23 @@ func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, 
 
 	// Merge all nydus bootstraps into a final nydus bootstrap.
 	pr, pw := io.Pipe()
+	blobDigestChan := make(chan []digest.Digest, 1)
 	go func() {
 		defer pw.Close()
-		if _, err := nydusify.Merge(ctx, layers, pw, nydusify.MergeOption{
-			WithTar: true,
-		}); err != nil {
+		blobDigests, err := nydusify.Merge(ctx, layers, pw, nydusify.MergeOption{
+			ChunkDictPath: comp.NydusChunkDictPath,
+			WithTar:       true,
+		})
+		if err != nil {
 			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
 		}
+		blobDigestChan <- blobDigests
 	}()
 
 	// Compress final nydus bootstrap to tar.gz and write into content store.
 	cw, err := content.OpenWriter(ctx, cm.ContentStore, content.WithRef("nydus-merge-"+iref.getChainID().String()))
 	if err != nil {
-		return nil, errors.Wrap(err, "open content store writer")
+		return nil, nil, errors.Wrap(err, "open content store writer")
 	}
 	defer cw.Close()
 
@@ -103,10 +105,10 @@ func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, 
 	uncompressedDgst := digest.SHA256.Digester()
 	compressed := io.MultiWriter(gw, uncompressedDgst.Hash())
 	if _, err := io.Copy(compressed, pr); err != nil {
-		return nil, errors.Wrapf(err, "copy bootstrap targz into content store")
+		return nil, nil, errors.Wrapf(err, "copy bootstrap targz into content store")
 	}
 	if err := gw.Close(); err != nil {
-		return nil, errors.Wrap(err, "close gzip writer")
+		return nil, nil, errors.Wrap(err, "close gzip writer")
 	}
 
 	compressedDgst := cw.Digest()
@@ -114,29 +116,56 @@ func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, 
 		containerdUncompressed: uncompressedDgst.Digest().String(),
 	})); err != nil {
 		if !errdefs.IsAlreadyExists(err) {
-			return nil, errors.Wrap(err, "commit to content store")
+			return nil, nil, errors.Wrap(err, "commit to content store")
 		}
 	}
 	if err := cw.Close(); err != nil {
-		return nil, errors.Wrap(err, "close content store writer")
+		return nil, nil, errors.Wrap(err, "close content store writer")
 	}
 
-	info, err := cm.ContentStore.Info(ctx, compressedDgst)
+	bootstrapInfo, err := cm.ContentStore.Info(ctx, compressedDgst)
 	if err != nil {
-		return nil, errors.Wrap(err, "get info from content store")
+		return nil, nil, errors.Wrap(err, "get info from content store")
+	}
+
+	blobDigests := <-blobDigestChan
+	blobDescs := []ocispecs.Descriptor{}
+	blobIDs := []string{}
+	uniqBlobDigests := map[digest.Digest]bool{}
+	for _, blobDigest := range blobDigests {
+		if uniqBlobDigests[blobDigest] {
+			continue
+		}
+		uniqBlobDigests[blobDigest] = true
+		blobInfo, err := cm.ContentStore.Info(ctx, blobDigest)
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "get info from content store")
+		}
+		blobDesc := ocispecs.Descriptor{
+			Digest:    blobDigest,
+			Size:      blobInfo.Size,
+			MediaType: nydusify.MediaTypeNydusBlob,
+			Annotations: map[string]string{
+				nydusify.LayerAnnotationNydusBlob: "true",
+				containerdUncompressed:            blobDigest.String(),
+			},
+		}
+		blobDescs = append(blobDescs, blobDesc)
+		blobIDs = append(blobIDs, blobDigest.Hex())
 	}
 
 	blobIDsBytes, err := json.Marshal(blobIDs)
 	if err != nil {
-		return nil, errors.Wrap(err, "marshal blob ids")
+		return nil, nil, errors.Wrap(err, "marshal blob ids")
 	}
 
 	desc := ocispecs.Descriptor{
 		Digest:    compressedDgst,
-		Size:      info.Size,
+		Size:      bootstrapInfo.Size,
 		MediaType: ocispecs.MediaTypeImageLayerGzip,
 		Annotations: map[string]string{
-			containerdUncompressed: uncompressedDgst.Digest().String(),
+			containerdUncompressed:            uncompressedDgst.Digest().String(),
+			nydusify.LayerAnnotationFSVersion: comp.NydusFsVersion,
 			// Use this annotation to identify nydus bootstrap layer.
 			nydusify.LayerAnnotationNydusBootstrap: "true",
 			// Track all blob digests for nydus snapshotter.
@@ -144,5 +173,5 @@ func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, 
 		},
 	}
 
-	return &desc, nil
+	return &desc, blobDescs, nil
 }

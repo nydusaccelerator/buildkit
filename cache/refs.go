@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/identity"
+	nydusutil "github.com/moby/buildkit/nydus/util"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver"
@@ -732,8 +733,9 @@ func (sr *immutableRef) linkBlob(ctx context.Context, desc ocispecs.Descriptor) 
 	if err != nil {
 		return err
 	}
+	nydusBlobLinkKey := nydusutil.GetNydusBlobLinkKey(ctx)
 	vInfo.Labels = map[string]string{
-		blobVariantGCLabel + blobDigest.String(): blobDigest.String(),
+		blobVariantGCLabel + nydusBlobLinkKey + blobDigest.String(): blobDigest.String(),
 	}
 	vInfo = addBlobDescToInfo(desc, vInfo)
 	if _, err := cs.Update(ctx, vInfo, fieldsFromLabels(vInfo.Labels)...); err != nil {
@@ -751,7 +753,7 @@ func (sr *immutableRef) linkBlob(ctx context.Context, desc ocispecs.Descriptor) 
 		return nil
 	}
 	info.Labels = map[string]string{
-		blobVariantGCLabel + desc.Digest.String(): desc.Digest.String(),
+		blobVariantGCLabel + nydusBlobLinkKey + desc.Digest.String(): desc.Digest.String(),
 	}
 	_, err = cs.Update(ctx, info, fieldsFromLabels(info.Labels)...)
 	return err
@@ -783,8 +785,17 @@ func getBlobWithCompression(ctx context.Context, cs content.Store, desc ocispecs
 }
 
 func walkBlob(ctx context.Context, cs content.Store, desc ocispecs.Descriptor, f func(ocispecs.Descriptor) bool) error {
-	if !f(desc) {
-		return nil
+	nydusBlobLinkKey := nydusutil.GetNydusBlobLinkKey(ctx)
+	info, err := cs.Info(ctx, desc.Digest)
+	if err != nil {
+		return err
+	}
+	for k := range info.Labels {
+		if k == blobVariantGCLabel+nydusBlobLinkKey+desc.Digest.String() {
+			if !f(desc) {
+				return nil
+			}
+		}
 	}
 	if _, err := walkBlobVariantsOnly(ctx, cs, desc.Digest, func(desc ocispecs.Descriptor) bool { return f(desc) }, nil); err != nil {
 		return err
@@ -803,10 +814,17 @@ func walkBlobVariantsOnly(ctx context.Context, cs content.Store, dgst digest.Dig
 	} else if err != nil {
 		return false, err
 	}
+	nydusBlobLinkKey := nydusutil.GetNydusBlobLinkKey(ctx)
 	var children []digest.Digest
 	for k, dgstS := range info.Labels {
-		if !strings.HasPrefix(k, blobVariantGCLabel) {
-			continue
+		if nydusBlobLinkKey != "" {
+			if !strings.HasPrefix(k, blobVariantGCLabel+nydusBlobLinkKey) {
+				continue
+			}
+		} else {
+			if !strings.HasPrefix(k, blobVariantGCLabel) || strings.Contains(k, nydusutil.NydusBlobLinkPrefix) {
+				continue
+			}
 		}
 		cDgst, err := digest.Parse(dgstS)
 		if err != nil || cDgst == dgst {

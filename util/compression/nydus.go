@@ -45,7 +45,10 @@ func (c nydusType) Compress(ctx context.Context, comp Config) (compressorFunc Co
 	digester := digest.Canonical.Digester()
 	return func(dest io.Writer, requiredMediaType string) (io.WriteCloser, error) {
 			writer := io.MultiWriter(dest, digester.Hash())
-			return nydusify.Pack(ctx, writer, nydusify.PackOption{})
+			return nydusify.Pack(ctx, writer, nydusify.PackOption{
+				FsVersion:     comp.NydusFsVersion,
+				ChunkDictPath: comp.NydusChunkDictPath,
+			})
 		}, func(ctx context.Context, cs content.Store) (map[string]string, error) {
 			// Fill necessary labels
 			uncompressedDgst := digester.Digest().String()

@@ -24,11 +24,11 @@ func patchImageLayers(ctx context.Context, remote *solver.Remote, history []ocis
 		return remote, history, nil
 	}
 
-	desc, err := cache.MergeNydus(ctx, ref, opts.RefCfg.Compression, sg)
+	bootstrapDesc, blobDescs, err := cache.MergeNydus(ctx, ref, opts.RefCfg.Compression, sg)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "merge nydus layer")
 	}
-	remote.Descriptors = append(remote.Descriptors, *desc)
+	remote.Descriptors = append(blobDescs, *bootstrapDesc)
 
 	remote, history = normalizeLayersAndHistory(ctx, remote, history, ref, opts.OCITypes)
 	return remote, history, nil

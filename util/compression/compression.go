@@ -59,6 +59,10 @@ type Config struct {
 	Type  Type
 	Force bool
 	Level *int
+
+	NydusFsVersion      string
+	NydusChunkDictImage string
+	NydusChunkDictPath  string
 }
 
 func New(t Type) Config {

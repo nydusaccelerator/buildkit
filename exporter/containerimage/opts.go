@@ -12,13 +12,16 @@ import (
 )
 
 const (
-	keyImageName        = "name"
-	keyLayerCompression = "compression"
-	keyCompressionLevel = "compression-level"
-	keyForceCompression = "force-compression"
-	keyOCITypes         = "oci-mediatypes"
-	keyBuildInfo        = "buildinfo"
-	keyBuildInfoAttrs   = "buildinfo-attrs"
+	keyImageName           = "name"
+	keyLayerCompression    = "compression"
+	keyCompressionLevel    = "compression-level"
+	keyForceCompression    = "force-compression"
+	keyOCITypes            = "oci-mediatypes"
+	keyBuildInfo           = "buildinfo"
+	keyBuildInfoAttrs      = "buildinfo-attrs"
+	keyNydusFsVersion      = "nydus-fs-version"
+	keyNydusChunkDictImage = "nydus-chunk-dict-image"
+	keyNydusPushBackend    = "nydus-push-backend"
 
 	// preferNondistLayersKey is an exporter option which can be used to mark a layer as non-distributable if the layer reference was
 	// already found to use a non-distributable media type.
@@ -75,6 +78,10 @@ func (c *ImageCommitOpts) Load(opt map[string]string) (map[string]string, error)
 			err = parseBoolWithDefault(&c.BuildInfoAttrs, k, v, false)
 		case keyPreferNondistLayers:
 			err = parseBool(&c.RefCfg.PreferNonDistributable, k, v)
+		case keyNydusFsVersion:
+			c.RefCfg.Compression.NydusFsVersion = v
+		case keyNydusChunkDictImage:
+			c.RefCfg.Compression.NydusChunkDictImage = v
 		default:
 			rest[k] = v
 		}

@@ -16,7 +16,7 @@ go build -tags=nydus -o ./bin/buildkitd ./cmd/buildkitd
 
 ### Building Nydus with BuildKit
 
-Download `nydus-image` binary from [nydus release page](https://github.com/dragonflyoss/image-service/releases) (require v2.1.0 or higher), then put the `nydus-image` binary path into $PATH or specifying it on `NYDUS_BUILDER` environment variable for buildkitd:
+Download `nydus-image` binary from [nydus release page](https://github.com/dragonflyoss/image-service/releases) (require v2.1.1 or higher), then put the `nydus-image` binary path into $PATH or specifying it on `NYDUS_BUILDER` environment variable for buildkitd:
 
 ```
 env NYDUS_BUILDER=/path/to/nydus-image buildkitd ...
@@ -30,6 +30,11 @@ On buildctl side, export nydus image as the one of compression types by specifyi
 buildctl build ... \
   --output type=image,name=docker.io/username/image,push=true,compression=nydus,oci-mediatypes=true
 ```
+
+Available options:
+
+- `nydus-fs-version`: Specify nydus image filesystem version, possible values: `5`, `6`, default `5`;
+- `nydus-chunk-dict-image`: Specify nydus chunk dict image reference for data de-duplication;
 
 ### Known limitations
 

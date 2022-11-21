@@ -36,6 +36,7 @@ import (
 	"github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/cache/metadata"
 	"github.com/moby/buildkit/client"
+	nydusutil "github.com/moby/buildkit/nydus/util"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
@@ -1115,6 +1116,185 @@ func TestLazyCommit(t *testing.T) {
 	_, err = cm.GetMutable(ctx, active.ID())
 	require.Error(t, err)
 	require.Equal(t, true, errors.Is(err, errNotFound))
+}
+
+func TestNydusLinkKey(t *testing.T) {
+	t.Parallel()
+	// windows fails when lazy blob is being extracted with "invalid windows mount type: 'bind'"
+	if runtime.GOOS != "linux" {
+		t.Skipf("unsupported GOOS: %s", runtime.GOOS)
+	}
+
+	ctx := namespaces.WithNamespace(context.Background(), "buildkit-test")
+
+	tmpdir := t.TempDir()
+
+	snapshotter, err := native.NewSnapshotter(filepath.Join(tmpdir, "snapshots"))
+	require.NoError(t, err)
+
+	co, cleanup, err := newCacheManager(ctx, t, cmOpt{
+		snapshotter:     snapshotter,
+		snapshotterName: "native",
+	})
+	require.NoError(t, err)
+	defer cleanup()
+	cm := co.manager
+
+	ctx, done, err := leaseutil.WithLease(ctx, co.lm, leaseutil.MakeTemporary)
+	require.NoError(t, err)
+	defer done(ctx)
+
+	allRefs := []ImmutableRef{}
+	createBlob := func(i int, compress bool) (ocispecs.Descriptor, *immutableRef) {
+		blobBytes, orgDesc, err := mapToBlob(map[string]string{"foo": fmt.Sprintf("%d", i)}, compress)
+		require.NoError(t, err)
+		descHandlers := DescHandlers(map[digest.Digest]*DescHandler{})
+		cw, err := co.cs.Writer(ctx, content.WithRef(fmt.Sprintf("write-test-blob-%s", orgDesc.Digest)))
+		require.NoError(t, err)
+		_, err = cw.Write(blobBytes)
+		require.NoError(t, err)
+		require.NoError(t, cw.Commit(ctx, 0, cw.Digest()))
+
+		descHandlers[orgDesc.Digest] = &DescHandler{
+			Provider: func(_ session.Group) content.Provider { return co.cs },
+		}
+		ref, err := cm.GetByBlob(ctx, orgDesc, nil, descHandlers)
+		require.NoError(t, err)
+
+		allRefs = append(allRefs, ref)
+		return orgDesc, ref.(*immutableRef)
+	}
+
+	defer func() {
+		for _, ref := range allRefs {
+			ref.Release(ctx)
+		}
+	}()
+
+	assertDesc := func(t *testing.T, expected, actual ocispecs.Descriptor) {
+		require.Equal(t, expected.MediaType, actual.MediaType)
+		require.Equal(t, expected.Digest, actual.Digest)
+		require.Equal(t, expected.Size, actual.Size)
+	}
+
+	// 1. Create blob without chunk dict first.
+
+	// create tar 0
+	originUncompressedDesc, baseRef := createBlob(0, false)
+	err = baseRef.linkBlob(ctx, originUncompressedDesc)
+	require.NoError(t, err)
+
+	// create gzip 0
+	originGzipDesc, _ := createBlob(0, true)
+	err = baseRef.linkBlob(ctx, originGzipDesc)
+	require.NoError(t, err)
+
+	// create gzip 1 (chunk_dict1)
+	newDesc, _ := createBlob(1, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc.Digest)
+	err = baseRef.linkBlob(ctx, newDesc)
+	require.NoError(t, err)
+	actualDesc, err := baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc, actualDesc)
+
+	// create gzip 2 (chunk_dict2)
+	newDesc, _ = createBlob(2, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc.Digest)
+	err = baseRef.linkBlob(ctx, newDesc)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc, actualDesc)
+
+	// check tar 0
+	ctx = context.TODO()
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Uncompressed)
+	require.NoError(t, err)
+	assertDesc(t, originUncompressedDesc, actualDesc)
+
+	// check gzip 0
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, originGzipDesc, actualDesc)
+
+	// 2. Create blob with chunk dict first.
+
+	// create gzip 3 (chunk_dict3)
+	newDesc1, baseRef := createBlob(3, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc1.Digest)
+	err = baseRef.linkBlob(ctx, newDesc1)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc1, actualDesc)
+
+	// create gzip 4 (chunk_dict4)
+	newDesc2, _ := createBlob(4, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc2.Digest)
+	err = baseRef.linkBlob(ctx, newDesc2)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc2, actualDesc)
+
+	// check gzip 3 (chunk_dict3)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc1.Digest)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc1, actualDesc)
+
+	// check gzip 4 (chunk_dict4)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", newDesc2.Digest)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc2, actualDesc)
+
+	// create tar 5
+	ctx = context.TODO()
+	originUncompressedDesc, _ = createBlob(5, false)
+	err = baseRef.linkBlob(ctx, originUncompressedDesc)
+	require.NoError(t, err)
+
+	// create gzip 5
+	originGzipDesc, _ = createBlob(5, true)
+	err = baseRef.linkBlob(ctx, originGzipDesc)
+	require.NoError(t, err)
+
+	// check tar 5
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Uncompressed)
+	require.NoError(t, err)
+	assertDesc(t, originUncompressedDesc, actualDesc)
+
+	// check gzip 5
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, originGzipDesc, actualDesc)
+
+	// 3. Create blob only with fs version.
+	newDesc2, baseRef = createBlob(6, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "5", "")
+	err = baseRef.linkBlob(ctx, newDesc2)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc2, actualDesc)
+
+	newDesc3, _ := createBlob(7, true)
+	ctx = nydusutil.WithNydusBlobLinkKey(context.TODO(), "6", "")
+	err = baseRef.linkBlob(ctx, newDesc3)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Gzip)
+	require.NoError(t, err)
+	assertDesc(t, newDesc3, actualDesc)
+
+	newDesc4, _ := createBlob(8, false)
+	ctx = context.TODO()
+	err = baseRef.linkBlob(ctx, newDesc4)
+	require.NoError(t, err)
+	actualDesc, err = baseRef.getBlobWithCompression(ctx, compression.Uncompressed)
+	require.NoError(t, err)
+	assertDesc(t, newDesc4, actualDesc)
 }
 
 func TestLoopLeaseContent(t *testing.T) {

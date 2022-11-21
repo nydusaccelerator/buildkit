@@ -428,7 +428,10 @@ func ensureCompression(ctx context.Context, ref *immutableRef, comp compression.
 				// This ref can be used as the specified compressionType. Keep it lazy.
 				return nil, nil
 			}
-			return nil, ref.linkBlob(ctx, desc)
+			// Check again, ensure blob (may be nydus chunk dict) exists in local.
+			if _, err := ref.getBlobWithCompression(ctx, comp.Type); err == nil {
+				return nil, ref.linkBlob(ctx, desc)
+			}
 		}
 
 		// First, lookup local content store

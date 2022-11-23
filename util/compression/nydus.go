@@ -46,8 +46,9 @@ func (c nydusType) Compress(ctx context.Context, comp Config) (compressorFunc Co
 	return func(dest io.Writer, requiredMediaType string) (io.WriteCloser, error) {
 			writer := io.MultiWriter(dest, digester.Hash())
 			return nydusify.Pack(ctx, writer, nydusify.PackOption{
-				FsVersion:     comp.NydusFsVersion,
 				ChunkDictPath: comp.NydusChunkDictPath,
+				FsVersion:     comp.NydusFsVersion,
+				Compressor:    "zstd",
 			})
 		}, func(ctx context.Context, cs content.Store) (map[string]string, error) {
 			// Fill necessary labels

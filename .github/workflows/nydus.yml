@@ -1,0 +1,45 @@
+name: Build Nydus Images
+
+on:
+  schedule:
+    # Do conversion every day at 00:03 clock UTC
+    - cron: "3 0 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  ORGANIZATION: ${{ github.repository }}
+  IMAGE_LIST_PATH: nydus-test/top_images/image_list.txt
+
+jobs:
+  convert-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Install Nydus binaries
+        run: |
+          NYDUS_VERSION=$(curl --silent "https://api.github.com/repos/dragonflyoss/image-service/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
+          wget https://github.com/dragonflyoss/image-service/releases/download/$NYDUS_VERSION/nydus-static-$NYDUS_VERSION-linux-amd64.tgz
+          tar xzf nydus-static-$NYDUS_VERSION-linux-amd64.tgz
+          sudo cp nydus-static/nydusify nydus-static/nydus-image /usr/local/bin/
+          sudo cp nydus-static/nydusd /usr/local/bin/nydusd
+      - name: Log in to the container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build buildkit
+        run: |
+          GOMAXPROCS=8 CGO_ENABLED=0 GOOS=linux go build -tags=nydus -o /usr/local/bin/buildctl ./cmd/buildctl
+          GOMAXPROCS=8 CGO_ENABLED=0 GOOS=linux go build -tags=nydus -o /usr/local/bin/buildkitd ./cmd/buildkitd
+      - name: Build and check basic images
+        run: |
+          sudo docker run -d --restart=always -p 5000:5000 registry
+          sudo buildkitd &> ./buildkitd.log &
+          sudo DOCKER_CONFIG=$HOME/.docker ./nydus-test/test.sh
+      - name: Build and check top docker hub images
+        run: |
+          sudo DOCKER_CONFIG=$HOME/.docker ./nydus-test/test_top.sh ${{ env.IMAGE_LIST_PATH }} ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}

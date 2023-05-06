@@ -93,7 +93,7 @@ type Solver struct {
 
 // Processor defines a processing function to be applied after solving, but
 // before exporting
-type Processor func(ctx context.Context, result *Result, s *Solver, j *solver.Job) (*Result, error)
+type Processor func(ctx context.Context, result *Result, s *Solver, j *solver.Job, comp compression.Config) (*Result, error)
 
 func New(opt Opt) (*Solver, error) {
 	s := &Solver{
@@ -200,7 +200,7 @@ func (s *Solver) recordBuildHistory(ctx context.Context, id string, req frontend
 		}
 
 		makeProvenance := func(res solver.ResultProxy, cap *provenance.Capture) (*controlapi.Descriptor, func(), error) {
-			prc, err := NewProvenanceCreator(ctx2, cap, res, attrs, j)
+			prc, err := NewProvenanceCreator(ctx2, cap, res, attrs, j, exp.Exporter.Config().Compression())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -501,7 +501,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	}
 
 	for _, post := range post {
-		res2, err := post(ctx, resProv, s, j)
+		res2, err := post(ctx, resProv, s, j, exp.Exporter.Config().Compression())
 		if err != nil {
 			return nil, err
 		}

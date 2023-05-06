@@ -15,12 +15,14 @@ type compressorKey struct{}
 type chunkDictDigestKey struct{}
 
 func WithContext(ctx context.Context, fsVersion string, compressor string, chunkDictDigest digest.Digest) context.Context {
-	if fsVersion == "" {
-		fsVersion = "5"
+	if fsVersion != "" {
+		ctx = context.WithValue(ctx, fsVersionKey{}, fsVersion)
 	}
 
-	ctx = context.WithValue(ctx, fsVersionKey{}, fsVersion)
-	ctx = context.WithValue(ctx, compressorKey{}, compressor)
+	if compressor != "" {
+		ctx = context.WithValue(ctx, compressorKey{}, compressor)
+	}
+
 	if chunkDictDigest != "" {
 		ctx = context.WithValue(ctx, chunkDictDigestKey{}, chunkDictDigest.String())
 	}
@@ -29,8 +31,8 @@ func WithContext(ctx context.Context, fsVersion string, compressor string, chunk
 }
 
 func GetContext(ctx context.Context) (string, string, string) {
-	fsVersion := ""
-	compressor := ""
+	fsVersion := "5"
+	compressor := "lz4_block"
 	chunkDictDigest := ""
 
 	ctxValue := ctx.Value(fsVersionKey{})

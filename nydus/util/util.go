@@ -31,8 +31,8 @@ func WithContext(ctx context.Context, fsVersion string, compressor string, chunk
 }
 
 func GetContext(ctx context.Context) (string, string, string) {
-	fsVersion := "5"
-	compressor := "lz4_block"
+	fsVersion := "6"
+	compressor := "zstd"
 	chunkDictDigest := ""
 
 	ctxValue := ctx.Value(fsVersionKey{})

@@ -170,10 +170,10 @@ func loadChunkDict(ctx context.Context, registryHosts docker.RegistryHosts, sm *
 	}
 
 	if bootstrapDesc.Annotations[nydusify.LayerAnnotationFSVersion] == "" {
-		bootstrapDesc.Annotations[nydusify.LayerAnnotationFSVersion] = "5"
+		bootstrapDesc.Annotations[nydusify.LayerAnnotationFSVersion] = "6"
 	}
 	if nydusFSVersion == "" {
-		nydusFSVersion = "5"
+		nydusFSVersion = "6"
 	}
 
 	if bootstrapDesc.Annotations[nydusify.LayerAnnotationFSVersion] != nydusFSVersion {

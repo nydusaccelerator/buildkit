@@ -148,10 +148,6 @@ func (c nydusType) OnlySupportOCITypes() bool {
 	return true
 }
 
-func (c nydusType) NeedsForceCompression() bool {
-	return true
-}
-
 func (c nydusType) MediaType() string {
 	return nydusify.MediaTypeNydusBlob
 }

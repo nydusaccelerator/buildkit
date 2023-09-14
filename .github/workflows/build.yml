@@ -295,7 +295,7 @@ jobs:
               .join(',');
       -
         name: Send to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: ${{ steps.files.outputs.result }}
 

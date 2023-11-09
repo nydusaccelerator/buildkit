@@ -20,8 +20,8 @@ jobs:
         uses: actions/checkout@v2
       - name: Install Nydus binaries
         run: |
-          NYDUS_VERSION=$(curl --silent "https://api.github.com/repos/dragonflyoss/image-service/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
-          wget https://github.com/dragonflyoss/image-service/releases/download/$NYDUS_VERSION/nydus-static-$NYDUS_VERSION-linux-amd64.tgz
+          NYDUS_VERSION=$(curl --silent "https://api.github.com/repos/dragonflyoss/nydus/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
+          wget https://github.com/dragonflyoss/nydus/releases/download/$NYDUS_VERSION/nydus-static-$NYDUS_VERSION-linux-amd64.tgz
           tar xzf nydus-static-$NYDUS_VERSION-linux-amd64.tgz
           sudo cp nydus-static/nydusify nydus-static/nydus-image /usr/local/bin/
           sudo cp nydus-static/nydusd /usr/local/bin/nydusd

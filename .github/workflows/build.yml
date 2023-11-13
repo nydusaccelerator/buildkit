@@ -284,7 +284,7 @@ jobs:
           path: ./coverage
       -
         name: List coverage files
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         id: files
         with:
           result-encoding: string

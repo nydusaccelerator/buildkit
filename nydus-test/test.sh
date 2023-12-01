@@ -26,7 +26,7 @@ test_case_1 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-compressor=zstd,oci-mediatypes=true
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-compressor=zstd,oci-mediatypes=true,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -35,7 +35,7 @@ test_case_1 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-compressor=lz4_block,oci-mediatypes=true
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-compressor=lz4_block,oci-mediatypes=true,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -50,13 +50,13 @@ test_case_2 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,oci-mediatypes=true
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,oci-mediatypes=true,force-compression=true
 
     # build oci
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:oci,push=true,compression=gzip,oci-mediatypes=true
+        --output type=image,name=$REGISTRY/test:oci,push=true,compression=gzip,oci-mediatypes=true,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -71,19 +71,19 @@ test_case_3 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/chunk-dict-1 \
-        --output type=image,name=$REGISTRY/test:nydus-chunk-dict-1,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION
+        --output type=image,name=$REGISTRY/test:nydus-chunk-dict-1,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,force-compression=true
 
     # build with nydus chunk dict 1
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1,force-compression=true
 
     # build with nydus chunk dict 1 (local cache) again
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -92,7 +92,7 @@ test_case_3 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -107,7 +107,7 @@ test_case_4 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-1,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -116,13 +116,13 @@ test_case_4 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/chunk-dict-2 \
-        --output type=image,name=$REGISTRY/test:nydus-chunk-dict-2,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION
+        --output type=image,name=$REGISTRY/test:nydus-chunk-dict-2,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,force-compression=true
 
     # build with nydus chunk dict 2
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-2
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,force-compression=true,nydus-fs-version=$NYDUS_FS_VERSION,nydus-chunk-dict-image=$REGISTRY/test:nydus-chunk-dict-2
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus
@@ -131,7 +131,7 @@ test_case_4 () {
     buildctl build --frontend dockerfile.v0 \
         --local context=./nydus-test/image \
         --local dockerfile=./nydus-test/image/image-1 \
-        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION
+        --output type=image,name=$REGISTRY/test:nydus,push=true,compression=nydus,nydus-fs-version=$NYDUS_FS_VERSION,force-compression=true
 
     # check
     nydusify check --source $REGISTRY/test:oci --target $REGISTRY/test:nydus

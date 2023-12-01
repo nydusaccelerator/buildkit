@@ -5,12 +5,11 @@ package client
 
 import (
 	"fmt"
-	"strconv"
 	"testing"
 
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/namespaces"
-	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
+	"github.com/containerd/nydus-snapshotter/pkg/converter"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/util/compression"
@@ -20,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNydusIntegration(t *testing.T) {
-	testIntegration(
-		t,
+func init() {
+	allTests = append(
+		allTests,
 		testBuildExportNydusWithHybrid,
 	)
 }
@@ -67,10 +66,11 @@ func testBuildExportNydusWithHybrid(t *testing.T, sb integration.Sandbox) {
 				{
 					Type: ExporterImage,
 					Attrs: map[string]string{
-						"name":           target,
-						"push":           "true",
-						"compression":    "nydus",
-						"oci-mediatypes": "true",
+						"name":              target,
+						"push":              "true",
+						"compression":       "nydus",
+						"oci-mediatypes":    "true",
+						"force-compression": "true",
 					},
 				},
 			},
@@ -84,12 +84,12 @@ func testBuildExportNydusWithHybrid(t *testing.T, sb integration.Sandbox) {
 		require.NoError(t, err)
 
 		require.Equal(t, len(manifest.Layers), 3)
-		require.Equal(t, "true", manifest.Layers[0].Annotations[nydusify.LayerAnnotationNydusBlob])
-		require.Equal(t, "true", manifest.Layers[1].Annotations[nydusify.LayerAnnotationNydusBlob])
-		require.Equal(t, "true", manifest.Layers[2].Annotations[nydusify.LayerAnnotationNydusBootstrap])
+		require.Equal(t, "true", manifest.Layers[0].Annotations[converter.LayerAnnotationNydusBlob])
+		require.Equal(t, "true", manifest.Layers[1].Annotations[converter.LayerAnnotationNydusBlob])
+		require.Equal(t, "true", manifest.Layers[2].Annotations[converter.LayerAnnotationNydusBootstrap])
 	}
 
-	buildOther := func(file string, compType compression.Type, forceCompression bool) {
+	buildOther := func(file string, compType compression.Type) {
 		orgImage := "docker.io/library/alpine:latest"
 		baseDef := llb.Image(orgImage).Run(llb.Args([]string{"/bin/touch", "/" + file}))
 		def, err := baseDef.Marshal(sb.Context())
@@ -109,7 +109,7 @@ func testBuildExportNydusWithHybrid(t *testing.T, sb integration.Sandbox) {
 						"push":              "true",
 						"compression":       compType.String(),
 						"oci-mediatypes":    "true",
-						"force-compression": strconv.FormatBool(forceCompression),
+						"force-compression": "true",
 					},
 				},
 			},
@@ -130,10 +130,10 @@ func testBuildExportNydusWithHybrid(t *testing.T, sb integration.Sandbox) {
 	// Make sure that the nydus compression layer is not mixed with other
 	// types of compression layers in an image.
 	buildNydus("foo")
-	buildOther("foo", compression.Gzip, false)
-	buildOther("foo", compression.Zstd, true)
+	buildOther("foo", compression.Gzip)
+	buildOther("foo", compression.Zstd)
 
-	buildOther("bar", compression.Gzip, false)
-	buildOther("bar", compression.Zstd, true)
+	buildOther("bar", compression.Gzip)
+	buildOther("bar", compression.Zstd)
 	buildNydus("bar")
 }

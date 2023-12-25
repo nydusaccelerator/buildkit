@@ -20,6 +20,7 @@ import (
 	"github.com/moby/buildkit/solver/llbsolver/provenance"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/source"
+	"github.com/moby/buildkit/util/compression"
 	"github.com/moby/buildkit/worker"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
@@ -372,7 +373,7 @@ type ProvenanceCreator struct {
 	addLayers func() error
 }
 
-func NewProvenanceCreator(ctx context.Context, cp *provenance.Capture, res solver.ResultProxy, attrs map[string]string, j *solver.Job) (*ProvenanceCreator, error) {
+func NewProvenanceCreator(ctx context.Context, cp *provenance.Capture, res solver.ResultProxy, attrs map[string]string, j *solver.Job, comp compression.Config) (*ProvenanceCreator, error) {
 	var reproducible bool
 	if v, ok := attrs["reproducible"]; ok {
 		b, err := strconv.ParseBool(v)
@@ -449,6 +450,7 @@ func NewProvenanceCreator(ctx context.Context, cp *provenance.Capture, res solve
 				ResolveRemotes: resolveRemotes,
 				Mode:           solver.CacheExportModeRemoteOnly,
 				ExportRoots:    true,
+				CompressionOpt: &comp,
 			}); err != nil {
 				return err
 			}

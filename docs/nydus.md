@@ -34,7 +34,7 @@ buildctl build ... \
 Available options:
 
 - `nydus-fs-version`: Specify nydus image filesystem version, possible values: `5`, `6`, default `6`;
-- `nydus-compressor`: Specify nydus image compressor, possible values: `none`, `lz4_block`, `zstd`, default `lz4_block`;
+- `nydus-compressor`: Specify nydus image compressor, possible values: `none`, `lz4_block`, `zstd`, default `zstd`;
 - `nydus-chunk-dict-image`: Specify nydus chunk dict image reference for data de-duplication;
 
 ### Known limitations
